@@ -15,11 +15,17 @@ Ce dépôt contient un exemple Arduino/ESP32 pour piloter des électrovannes via
 
 ## Dépendances Arduino
 
-Installe ces bibliothèques dans l'IDE Arduino (ou PlatformIO):
+Installe le support ESP32 dans l'IDE Arduino (ou Arduino CLI):
+
+- URL du gestionnaire de cartes: `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
+- Package: `esp32 by Espressif Systems`
+
+Bibliothèques utilisées, incluses avec le core ESP32:
 
 - `WiFi` (incluse avec ESP32)
 - `WebServer` (incluse avec ESP32)
-- `ArduinoJson`
+
+Aucune bibliothèque externe comme `ArduinoJson` n'est nécessaire.
 
 ## Configuration
 
@@ -58,6 +64,7 @@ Supposons que l'ESP32 ait l'IP `192.168.1.50`.
 - `GET /valves/{id}`
 - `POST /valves/{id}/open`
 - `POST /valves/{id}/close`
+- `POST /valves/close-all`
 
 ### Exemples `curl`
 
@@ -67,6 +74,7 @@ curl http://192.168.1.50/valves
 curl http://192.168.1.50/valves/zone1
 curl -X POST http://192.168.1.50/valves/zone1/open
 curl -X POST http://192.168.1.50/valves/zone1/close
+curl -X POST http://192.168.1.50/valves/close-all
 ```
 
 ## Notes matériel importantes
