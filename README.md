@@ -6,6 +6,7 @@ Ce dépôt contient un exemple Arduino/ESP32 pour piloter des électrovannes via
 
 - Gestion de plusieurs électrovannes (`zone1`, `zone2`, ...).
 - Contrôle **ouverture / fermeture** par endpoint REST.
+- Interface web simple (`/`) pour ouvrir/fermer les vannes.
 - Endpoint de santé (`/health`).
 - Retour JSON simple.
 
@@ -60,6 +61,7 @@ ValveConfig valves[] = {
 Supposons que l'ESP32 ait l'IP `192.168.1.50`.
 
 - `GET /health`
+- `GET /` (interface web)
 - `GET /valves`
 - `GET /valves/{id}`
 - `POST /valves/{id}/open`

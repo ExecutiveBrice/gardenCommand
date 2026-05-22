@@ -23,6 +23,117 @@ const size_t VALVE_COUNT = sizeof(valves) / sizeof(valves[0]);
 
 WebServer server(80);
 
+const char WEB_UI_HTML[] PROGMEM = R"HTML(
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contrôle des électrovannes</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: Arial, sans-serif; margin: 1.5rem; }
+    h1 { margin-bottom: 0.5rem; }
+    .status { margin: 0.25rem 0 1rem; color: #555; }
+    .valve { border: 1px solid #bbb; border-radius: 10px; padding: 0.75rem; margin-bottom: 0.75rem; }
+    .valve h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+    .actions { display: flex; gap: 0.5rem; }
+    button { padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #888; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .open { color: #0a7f2e; font-weight: bold; }
+    .closed { color: #a42323; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Interface de pilotage des vannes</h1>
+  <p class="status" id="globalStatus">Chargement…</p>
+  <button id="closeAllButton" type="button">Fermer toutes les vannes</button>
+  <div id="valves"></div>
+
+  <script>
+    const globalStatus = document.getElementById('globalStatus');
+    const closeAllButton = document.getElementById('closeAllButton');
+    const valvesContainer = document.getElementById('valves');
+
+    function setStatus(message) {
+      globalStatus.textContent = message;
+    }
+
+    function valveStateClass(isOpen) {
+      return isOpen ? 'open' : 'closed';
+    }
+
+    function valveStateLabel(isOpen) {
+      return isOpen ? 'OUVERTE' : 'FERMÉE';
+    }
+
+    async function apiRequest(url, options = {}) {
+      const response = await fetch(url, options);
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || 'Erreur API');
+      }
+      return data;
+    }
+
+    function renderValve(valve) {
+      return `
+        <section class="valve">
+          <h2>${valve.id}</h2>
+          <p>État: <span class="${valveStateClass(valve.open)}">${valveStateLabel(valve.open)}</span></p>
+          <div class="actions">
+            <button type="button" data-action="open" data-id="${valve.id}">Ouvrir</button>
+            <button type="button" data-action="close" data-id="${valve.id}">Fermer</button>
+          </div>
+        </section>
+      `;
+    }
+
+    async function loadValves() {
+      setStatus('Récupération des états...');
+      const data = await apiRequest('/valves');
+      valvesContainer.innerHTML = data.valves.map(renderValve).join('');
+      setStatus('Prêt');
+    }
+
+    async function setValve(id, action) {
+      setStatus(`Commande en cours: ${id} -> ${action}`);
+      await apiRequest(`/valves/${id}/${action}`, { method: 'POST' });
+      await loadValves();
+    }
+
+    valvesContainer.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      button.disabled = true;
+      try {
+        await setValve(button.dataset.id, button.dataset.action);
+      } catch (error) {
+        setStatus(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    closeAllButton.addEventListener('click', async () => {
+      closeAllButton.disabled = true;
+      try {
+        setStatus('Fermeture de toutes les vannes...');
+        await apiRequest('/valves/close-all', { method: 'POST' });
+        await loadValves();
+      } catch (error) {
+        setStatus(error.message);
+      } finally {
+        closeAllButton.disabled = false;
+      }
+    });
+
+    loadValves().catch((error) => setStatus(error.message));
+  </script>
+</body>
+</html>
+)HTML";
+
 // ===== Helpers =====
 String jsonEscape(const String &value) {
   String escaped;
@@ -93,6 +204,10 @@ void handleHealth() {
   body += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
   body += "}";
   sendJson(200, body);
+}
+
+void handleWebUi() {
+  server.send(200, "text/html; charset=utf-8", WEB_UI_HTML);
 }
 
 void handleListValves() {
@@ -189,6 +304,7 @@ void setup() {
   Serial.println(WiFi.localIP());
 
   server.on("/health", HTTP_GET, handleHealth);
+  server.on("/", HTTP_GET, handleWebUi);
   server.on("/valves", HTTP_GET, handleListValves);
   server.on("/valves/close-all", HTTP_POST, handleCloseAllValves);
   server.onNotFound(handleNotFound);
