@@ -1,14 +1,13 @@
 #include <WiFi.h>
 #include <WebServer.h>
-#include <ArduinoJson.h>
 
 // ===== Wi-Fi =====
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char *WIFI_SSID = "YOUR_WIFI_SSID";
+const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
 // ===== Configuration =====
 struct ValveConfig {
-  const char* id;
+  const char *id;
   uint8_t pin;
   bool activeHigh; // true = HIGH opens valve, false = LOW opens valve
 };
@@ -25,17 +24,40 @@ const size_t VALVE_COUNT = sizeof(valves) / sizeof(valves[0]);
 WebServer server(80);
 
 // ===== Helpers =====
-void setValveState(const ValveConfig& valve, bool open) {
+String jsonEscape(const String &value) {
+  String escaped;
+  escaped.reserve(value.length() + 4);
+
+  for (size_t i = 0; i < value.length(); i++) {
+    char c = value.charAt(i);
+    if (c == '"' || c == '\\') {
+      escaped += '\\';
+    }
+    escaped += c;
+  }
+
+  return escaped;
+}
+
+void sendJson(int statusCode, const String &body) {
+  server.send(statusCode, "application/json", body);
+}
+
+void sendError(int statusCode, const String &message) {
+  sendJson(statusCode, "{\"ok\":false,\"error\":\"" + jsonEscape(message) + "\"}");
+}
+
+void setValveState(const ValveConfig &valve, bool open) {
   const uint8_t level = (open == valve.activeHigh) ? HIGH : LOW;
   digitalWrite(valve.pin, level);
 }
 
-bool getValveState(const ValveConfig& valve) {
+bool getValveState(const ValveConfig &valve) {
   const uint8_t level = digitalRead(valve.pin);
   return valve.activeHigh ? (level == HIGH) : (level == LOW);
 }
 
-const ValveConfig* findValveById(const String& valveId) {
+const ValveConfig *findValveById(const String &valveId) {
   for (size_t i = 0; i < VALVE_COUNT; i++) {
     if (valveId.equalsIgnoreCase(valves[i].id)) {
       return &valves[i];
@@ -44,86 +66,105 @@ const ValveConfig* findValveById(const String& valveId) {
   return nullptr;
 }
 
-void sendJson(int statusCode, JsonDocument& doc) {
-  String body;
-  serializeJson(doc, body);
-  server.send(statusCode, "application/json", body);
+String valveToJson(const ValveConfig &valve) {
+  String json = "{";
+  json += "\"id\":\"" + jsonEscape(valve.id) + "\",";
+  json += "\"pin\":" + String(valve.pin) + ",";
+  json += "\"open\":" + String(getValveState(valve) ? "true" : "false");
+  json += "}";
+  return json;
 }
 
-void sendError(int statusCode, const char* message) {
-  JsonDocument doc;
-  doc["ok"] = false;
-  doc["error"] = message;
-  sendJson(statusCode, doc);
+void sendValve(const ValveConfig &valve) {
+  sendJson(200, "{\"ok\":true,\"valve\":" + valveToJson(valve) + "}");
 }
 
-void sendValve(const ValveConfig& valve) {
-  JsonDocument doc;
-  doc["ok"] = true;
-  JsonObject data = doc["valve"].to<JsonObject>();
-  data["id"] = valve.id;
-  data["pin"] = valve.pin;
-  data["open"] = getValveState(valve);
-  sendJson(200, doc);
+void closeAllValves() {
+  for (size_t i = 0; i < VALVE_COUNT; i++) {
+    setValveState(valves[i], false);
+  }
 }
 
+// ===== Handlers =====
 void handleHealth() {
-  JsonDocument doc;
-  doc["ok"] = true;
-  doc["service"] = "esp32-valves";
-  doc["ip"] = WiFi.localIP().toString();
-  sendJson(200, doc);
+  String body = "{";
+  body += "\"ok\":true,";
+  body += "\"service\":\"esp32-valves\",";
+  body += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
+  body += "}";
+  sendJson(200, body);
 }
 
 void handleListValves() {
-  JsonDocument doc;
-  doc["ok"] = true;
-  JsonArray arr = doc["valves"].to<JsonArray>();
+  String body = "{\"ok\":true,\"valves\":[";
 
   for (size_t i = 0; i < VALVE_COUNT; i++) {
-    JsonObject v = arr.add<JsonObject>();
-    v["id"] = valves[i].id;
-    v["pin"] = valves[i].pin;
-    v["open"] = getValveState(valves[i]);
+    if (i > 0) {
+      body += ",";
+    }
+    body += valveToJson(valves[i]);
   }
 
-  sendJson(200, doc);
+  body += "]}";
+  sendJson(200, body);
 }
 
-void handleGetValve() {
-  const String id = server.pathArg(0);
-  const ValveConfig* valve = findValveById(id);
+void handleCloseAllValves() {
+  closeAllValves();
+  sendJson(200, "{\"ok\":true,\"message\":\"all valves closed\"}");
+}
 
+void handleSetValve(const ValveConfig &valve, bool open) {
+  setValveState(valve, open);
+  sendValve(valve);
+}
+
+bool handleValveRoute(const String &path, HTTPMethod method) {
+  const String prefix = "/valves/";
+  if (!path.startsWith(prefix)) {
+    return false;
+  }
+
+  String rest = path.substring(prefix.length());
+  int slashIndex = rest.indexOf('/');
+  String valveId = slashIndex >= 0 ? rest.substring(0, slashIndex) : rest;
+  String action = slashIndex >= 0 ? rest.substring(slashIndex + 1) : "";
+
+  if (valveId.length() == 0) {
+    sendError(404, "Valve id is missing");
+    return true;
+  }
+
+  const ValveConfig *valve = findValveById(valveId);
   if (!valve) {
     sendError(404, "Valve not found");
-    return;
+    return true;
   }
 
-  sendValve(*valve);
-}
-
-void handleSetValve(bool open) {
-  const String id = server.pathArg(0);
-  const ValveConfig* valve = findValveById(id);
-
-  if (!valve) {
-    sendError(404, "Valve not found");
-    return;
+  if (action.length() == 0 && method == HTTP_GET) {
+    sendValve(*valve);
+    return true;
   }
 
-  setValveState(*valve, open);
-  sendValve(*valve);
-}
+  if (action == "open" && method == HTTP_POST) {
+    handleSetValve(*valve, true);
+    return true;
+  }
 
-void handleOpenValve() {
-  handleSetValve(true);
-}
+  if (action == "close" && method == HTTP_POST) {
+    handleSetValve(*valve, false);
+    return true;
+  }
 
-void handleCloseValve() {
-  handleSetValve(false);
+  sendError(405, "Method or action not allowed");
+  return true;
 }
 
 void handleNotFound() {
+  if (handleValveRoute(server.uri(), server.method())) {
+    return;
+  }
+
   sendError(404, "Endpoint not found");
 }
 
@@ -132,8 +173,8 @@ void setup() {
 
   for (size_t i = 0; i < VALVE_COUNT; i++) {
     pinMode(valves[i].pin, OUTPUT);
-    setValveState(valves[i], false); // keep everything closed at boot
   }
+  closeAllValves();
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -149,10 +190,7 @@ void setup() {
 
   server.on("/health", HTTP_GET, handleHealth);
   server.on("/valves", HTTP_GET, handleListValves);
-  server.on(UriBraces("/valves/{}"), HTTP_GET, handleGetValve);
-  server.on(UriBraces("/valves/{}/open"), HTTP_POST, handleOpenValve);
-  server.on(UriBraces("/valves/{}/close"), HTTP_POST, handleCloseValve);
-
+  server.on("/valves/close-all", HTTP_POST, handleCloseAllValves);
   server.onNotFound(handleNotFound);
 
   server.begin();
